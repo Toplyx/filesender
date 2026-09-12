@@ -1,15 +1,17 @@
 {
   "rules": [
     {
-      "allowedOrigins": [
-        "https://filesender.lubos1085.workers.dev",
-        "http://localhost:3000",
-        "http://localhost:8787",
-        "https://localhost:3000",
-        "https://localhost:8787"
-      ],
-      "allowedMethods": ["PUT", "GET", "HEAD", "POST", "OPTIONS"],
-      "allowedHeaders": ["*"],
+      "allowed": {
+        "methods": ["PUT", "GET", "HEAD", "POST", "OPTIONS"],
+        "origins": [
+          "https://filesender.lubos1085.workers.dev",
+          "http://localhost:3000",
+          "http://localhost:8787",
+          "https://localhost:3000",
+          "https://localhost:8787"
+        ],
+        "headers": ["*"]
+      },
       "exposeHeaders": ["ETag", "Content-Length", "Content-Type"],
       "maxAgeSeconds": 3600
     }

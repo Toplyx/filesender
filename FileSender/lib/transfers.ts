@@ -1,4 +1,6 @@
 import { env } from "cloudflare:workers";
+import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 const MAX_SIZE = 150_000_000_000;
 const TTL = 24 * 60 * 60 * 1000;
@@ -49,41 +51,29 @@ function getR2BucketName(config: Record<string, string | undefined>) {
 function awsEscapePath(value: string) {
   return value.split("/").map((segment) => encodeURIComponent(segment)).join("/");
 }
-async function hmacSha256(secret: string, value: string) {
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value));
-  return Array.from(new Uint8Array(signature), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
 async function buildSignedR2Url({ objectKey, bucketName, accountId, accessKeyId, secretAccessKey, operation }: { objectKey: string; bucketName: string; accountId: string; accessKeyId: string; secretAccessKey: string; operation: "PUT" | "GET" }) {
-  const region = "auto";
-  const host = `${accountId}.r2.cloudflarestorage.com`;
-  const date = new Date();
-  const amzDate = date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
-  const dateStamp = amzDate.slice(0, 8);
-  const canonicalUri = `/${awsEscapePath(`${bucketName}/${objectKey}`)}`;
-  const canonicalQuery = new URLSearchParams({
-    "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
-    "X-Amz-Credential": `${accessKeyId}/${dateStamp}/${region}/s3/aws4_request`,
-    "X-Amz-Date": amzDate,
-    "X-Amz-Expires": String(SIGNED_URL_TTL),
-    "X-Amz-SignedHeaders": "host",
-  }).toString();
-  const canonicalHeaders = `host:${host}\n`;
-  const payloadHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-  const canonicalRequest = [operation, canonicalUri, canonicalQuery, canonicalHeaders, "host", payloadHash].join("\n");
-  const stringToSign = ["AWS4-HMAC-SHA256", amzDate, `${dateStamp}/${region}/s3/aws4_request`, await sha256Hex(canonicalRequest)].join("\n");
-  const kDate = await hmacSha256(`AWS4${secretAccessKey}`, dateStamp);
-  const kRegion = await hmacSha256(kDate, region);
-  const kService = await hmacSha256(kRegion, "s3");
-  const kSigning = await hmacSha256(kService, "aws4_request");
-  const signature = await hmacSha256(kSigning, stringToSign);
-  const query = new URLSearchParams(canonicalQuery);
-  query.set("X-Amz-Signature", signature);
-  return `https://${host}${canonicalUri}?${query.toString()}`;
-}
-async function sha256Hex(value: string) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  const client = new S3Client({
+    region: "auto",
+    endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+    credentials: {
+      accessKeyId,
+      secretAccessKey,
+    },
+    forcePathStyle: true,
+  });
+
+  if (operation === "PUT") {
+    return await getSignedUrl(client, new PutObjectCommand({
+      Bucket: bucketName,
+      Key: awsEscapePath(objectKey),
+      ContentType: "application/octet-stream",
+    }), { expiresIn: SIGNED_URL_TTL });
+  }
+
+  return await getSignedUrl(client, new GetObjectCommand({
+    Bucket: bucketName,
+    Key: awsEscapePath(objectKey),
+  }), { expiresIn: SIGNED_URL_TTL });
 }
 async function generateSignedObjectUrl(objectKey: string, operation: "PUT" | "GET") {
   const { config } = storage();
@@ -91,9 +81,11 @@ async function generateSignedObjectUrl(objectKey: string, operation: "PUT" | "GE
   const accessKeyId = config.R2_ACCESS_KEY_ID;
   const secretAccessKey = config.R2_SECRET_ACCESS_KEY;
   const bucketName = getR2BucketName(config as Record<string, string | undefined>);
+
   if (!accountId || !accessKeyId || !secretAccessKey || !bucketName) {
     throw new ApiError(503, "Direct upload is not configured. Set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, and R2_BUCKET_NAME in Cloudflare Worker secrets.");
   }
+
   try {
     return await buildSignedR2Url({
       objectKey,
