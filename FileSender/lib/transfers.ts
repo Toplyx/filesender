@@ -98,6 +98,21 @@ async function cleanup(db: D1Database, bucket: R2Bucket) {
 }
 function publicTransfer(row: TransferRow) { return { name: row.name, size: row.size, expiresAt: row.expires_at }; }
 
+async function createTransferRecord(db: D1Database, name: string, size: number, now = Date.now()) {
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const id = crypto.randomUUID();
+    const downloadToken = crypto.randomUUID();
+    const uploadToken = crypto.randomUUID();
+    const code = randomCode();
+    const codeHash = await hash(code);
+    const existing = await db.prepare("SELECT id FROM transfers WHERE code_hash = ?").bind(codeHash).first<{ id: string }>();
+    if (existing) continue;
+    const insert = await db.prepare("INSERT INTO transfers (id, code_hash, download_token, upload_token, name, size, status, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)").bind(id, codeHash, downloadToken, uploadToken, name, size, now, now + TTL).run();
+    if (insert.success) return { id, code, downloadToken, uploadToken, expiresAt: now + TTL };
+  }
+  throw new ApiError(503, "The code could not be generated. Please try again.");
+}
+
 export async function upload(request: Request) {
   let objectId: string | null = null;
   try {
@@ -114,20 +129,12 @@ export async function upload(request: Request) {
       if (!safeName || safeName === "." || safeName === "..") throw new ApiError(400, "The file must have a valid name.");
       await limit(request, db, "upload", 20);
       await cleanup(db, bucket);
-      const id = crypto.randomUUID();
-      const downloadToken = crypto.randomUUID();
-      const uploadToken = crypto.randomUUID();
-      let code = "";
-      for (let attempt = 0; attempt < 8; attempt++) {
-        const candidate = randomCode();
-        const row = await db.prepare("INSERT INTO transfers (id, code_hash, download_token, upload_token, name, size, status, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?) ON CONFLICT(code_hash) DO NOTHING RETURNING id").bind(id, await hash(candidate), downloadToken, uploadToken, safeName, length, Date.now(), Date.now() + TTL).first();
-        if (row) { code = candidate; objectId = id; break; }
-      }
-      if (!code) throw new ApiError(503, "The code could not be generated. Please try again.");
-      const uploadUrl = await generateSignedObjectUrl(`transfers/${id}`, "PUT");
+      const transfer = await createTransferRecord(db, safeName, length);
+      objectId = transfer.id;
+      const uploadUrl = await generateSignedObjectUrl(`transfers/${transfer.id}`, "PUT");
       if (!uploadUrl) throw new ApiError(503, "Direct upload is not configured. Set the R2 signed credentials first.");
-      const expiresAt = Date.now() + TTL;
-      return json({ code, name: safeName, size: length, expiresAt, uploadUrl, uploadToken }, 201);
+      const expiresAt = transfer.expiresAt;
+      return json({ code: transfer.code, name: safeName, size: length, expiresAt, uploadUrl, uploadToken: transfer.uploadToken }, 201);
     }
 
     const length = Number(request.headers.get("content-length"));
@@ -141,22 +148,14 @@ export async function upload(request: Request) {
     if (!name || name === "." || name === "..") throw new ApiError(400, "The file must have a valid name.");
     await limit(request, db, "upload", 20);
     await cleanup(db, bucket);
-    const id = crypto.randomUUID();
-    const downloadToken = crypto.randomUUID();
-    const uploadToken = crypto.randomUUID();
-    let code = "";
-    for (let attempt = 0; attempt < 8; attempt++) {
-      const candidate = randomCode();
-      const row = await db.prepare("INSERT INTO transfers (id, code_hash, download_token, upload_token, name, size, status, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?) ON CONFLICT(code_hash) DO NOTHING RETURNING id").bind(id, await hash(candidate), downloadToken, uploadToken, name, length, Date.now(), Date.now() + TTL).first();
-      if (row) { code = candidate; objectId = id; break; }
-    }
-    if (!code) throw new ApiError(503, "The code could not be generated. Please try again.");
-    const stored = await bucket.put(`transfers/${id}`, request.body, { httpMetadata: { contentType: "application/octet-stream" } });
+    const transfer = await createTransferRecord(db, name, length);
+    objectId = transfer.id;
+    const stored = await bucket.put(`transfers/${transfer.id}`, request.body, { httpMetadata: { contentType: "application/octet-stream" } });
     if (!stored || stored.size !== length) throw new ApiError(400, "The file did not upload completely. Please try sending it again.");
     const expiresAt = Date.now() + TTL;
-    await db.prepare("UPDATE transfers SET status = 'ready', expires_at = ? WHERE id = ?").bind(expiresAt, id).run();
+    await db.prepare("UPDATE transfers SET status = 'ready', expires_at = ? WHERE id = ?").bind(expiresAt, transfer.id).run();
     objectId = null;
-    return json({ code, name, size: length, expiresAt }, 201);
+    return json({ code: transfer.code, name, size: length, expiresAt }, 201);
   } catch (error) {
     if (objectId) {
       try { const { db, bucket } = storage(); await bucket.delete(`transfers/${objectId}`); await db.prepare("DELETE FROM transfers WHERE id = ?").bind(objectId).run(); } catch { console.error("FileSender failed upload cleanup deferred"); }

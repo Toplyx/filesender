@@ -8,6 +8,20 @@
       "when": 1789229547982,
       "tag": "0000_secret_mister_sinister",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1757725200000,
+      "tag": "0001_fix_upload_token",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1757725300000,
+      "tag": "0002_fix_missing_unique_indexes",
+      "breakpoints": true
     }
   ]
 }
