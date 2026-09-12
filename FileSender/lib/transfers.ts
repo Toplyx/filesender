@@ -1,6 +1,4 @@
 import { env } from "cloudflare:workers";
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 const MAX_SIZE = 150_000_000_000;
 const TTL = 24 * 60 * 60 * 1000;
@@ -28,13 +26,6 @@ function failure(error: unknown) {
   return json({ error: "The file cannot be transferred right now. Please try again later." }, 503);
 }
 
-function signedUploadConfigMissing(config: { R2_ACCOUNT_ID?: string; CLOUDFLARE_ACCOUNT_ID?: string; R2_ACCESS_KEY_ID?: string; R2_SECRET_ACCESS_KEY?: string; R2_BUCKET_NAME?: string; BUCKET_NAME?: string }) {
-  const accountId = config.R2_ACCOUNT_ID || config.CLOUDFLARE_ACCOUNT_ID;
-  const accessKeyId = config.R2_ACCESS_KEY_ID;
-  const secretAccessKey = config.R2_SECRET_ACCESS_KEY;
-  const bucketName = getR2BucketName(config);
-  return !accountId || !accessKeyId || !secretAccessKey || !bucketName;
-}
 async function hash(value: string) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
@@ -55,48 +46,65 @@ function sanitizeFileName(value: string) {
 function getR2BucketName(config: Record<string, string | undefined>) {
   return config.R2_BUCKET_NAME || config.BUCKET_NAME || "filesender-files";
 }
-function getR2Client(config: { R2_ACCOUNT_ID?: string; CLOUDFLARE_ACCOUNT_ID?: string; R2_ACCESS_KEY_ID?: string; R2_SECRET_ACCESS_KEY?: string; R2_BUCKET_NAME?: string; BUCKET_NAME?: string }) {
-  const accountId = config.R2_ACCOUNT_ID || config.CLOUDFLARE_ACCOUNT_ID;
-  const accessKeyId = config.R2_ACCESS_KEY_ID;
-  const secretAccessKey = config.R2_SECRET_ACCESS_KEY;
-  if (!accountId || !accessKeyId || !secretAccessKey) return null;
-  return {
-    client: new S3Client({
-      region: "auto",
-      endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
-      forcePathStyle: true,
-      credentials: {
-        accessKeyId,
-        secretAccessKey,
-      },
-    }),
-    bucketName: getR2BucketName(config),
-  };
+function awsEscapePath(value: string) {
+  return value.split("/").map((segment) => encodeURIComponent(segment)).join("/");
 }
-function describeR2Config(config: { R2_ACCOUNT_ID?: string; CLOUDFLARE_ACCOUNT_ID?: string; R2_ACCESS_KEY_ID?: string; R2_SECRET_ACCESS_KEY?: string; R2_BUCKET_NAME?: string; BUCKET_NAME?: string }) {
-  const accountId = config.R2_ACCOUNT_ID || config.CLOUDFLARE_ACCOUNT_ID;
-  const accessKeyId = config.R2_ACCESS_KEY_ID ? `${config.R2_ACCESS_KEY_ID.slice(0, 4)}…${config.R2_ACCESS_KEY_ID.slice(-4)}` : "missing";
-  const secretStatus = config.R2_SECRET_ACCESS_KEY ? "present" : "missing";
-  const bucketName = getR2BucketName(config);
-  return { accountId: accountId ?? "missing", accessKeyId, secretStatus, bucketName };
+async function hmacSha256(secret: string, value: string) {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(signature), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+async function buildSignedR2Url({ objectKey, bucketName, accessKeyId, secretAccessKey, operation }: { objectKey: string; bucketName: string; accessKeyId: string; secretAccessKey: string; operation: "PUT" | "GET" }) {
+  const region = "auto";
+  const host = `${bucketName}.r2.cloudflarestorage.com`;
+  const date = new Date();
+  const amzDate = date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+  const dateStamp = amzDate.slice(0, 8);
+  const canonicalUri = `/${awsEscapePath(objectKey)}`;
+  const canonicalQuery = new URLSearchParams({
+    "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+    "X-Amz-Credential": `${accessKeyId}/${dateStamp}/${region}/s3/aws4_request`,
+    "X-Amz-Date": amzDate,
+    "X-Amz-Expires": String(SIGNED_URL_TTL),
+    "X-Amz-SignedHeaders": "host",
+  }).toString();
+  const canonicalHeaders = `host:${host}\n`;
+  const payloadHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+  const canonicalRequest = [operation, canonicalUri, canonicalQuery, canonicalHeaders, "host", payloadHash].join("\n");
+  const stringToSign = ["AWS4-HMAC-SHA256", amzDate, `${dateStamp}/${region}/s3/aws4_request`, await sha256Hex(canonicalRequest)].join("\n");
+  const kDate = await hmacSha256(`AWS4${secretAccessKey}`, dateStamp);
+  const kRegion = await hmacSha256(kDate, region);
+  const kService = await hmacSha256(kRegion, "s3");
+  const kSigning = await hmacSha256(kService, "aws4_request");
+  const signature = await hmacSha256(kSigning, stringToSign);
+  const query = new URLSearchParams(canonicalQuery);
+  query.set("X-Amz-Signature", signature);
+  return `https://${host}${canonicalUri}?${query.toString()}`;
+}
+async function sha256Hex(value: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 async function generateSignedObjectUrl(objectKey: string, operation: "PUT" | "GET") {
   const { config } = storage();
-  if (signedUploadConfigMissing(config as { R2_ACCOUNT_ID?: string; CLOUDFLARE_ACCOUNT_ID?: string; R2_ACCESS_KEY_ID?: string; R2_SECRET_ACCESS_KEY?: string; R2_BUCKET_NAME?: string; BUCKET_NAME?: string })) {
+  const accountId = config.R2_ACCOUNT_ID || config.CLOUDFLARE_ACCOUNT_ID;
+  const accessKeyId = config.R2_ACCESS_KEY_ID;
+  const secretAccessKey = config.R2_SECRET_ACCESS_KEY;
+  const bucketName = getR2BucketName(config as Record<string, string | undefined>);
+  if (!accountId || !accessKeyId || !secretAccessKey || !bucketName) {
     throw new ApiError(503, "Direct upload is not configured. Set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, and R2_BUCKET_NAME in Cloudflare Worker secrets.");
   }
-  const client = getR2Client(config as { R2_ACCOUNT_ID?: string; CLOUDFLARE_ACCOUNT_ID?: string; R2_ACCESS_KEY_ID?: string; R2_SECRET_ACCESS_KEY?: string; R2_BUCKET_NAME?: string; BUCKET_NAME?: string });
-  if (!client) {
-    throw new ApiError(503, "Direct upload is not configured. Check the Cloudflare R2 credentials for this Worker.");
-  }
-  const command = operation === "PUT"
-    ? new PutObjectCommand({ Bucket: client.bucketName, Key: objectKey, ContentType: "application/octet-stream" })
-    : new GetObjectCommand({ Bucket: client.bucketName, Key: objectKey });
   try {
-    return await getSignedUrl(client.client, command, { expiresIn: SIGNED_URL_TTL });
+    return await buildSignedR2Url({
+      objectKey: `/${bucketName}/${objectKey}`.replace(/^\/+/, ""),
+      bucketName,
+      accessKeyId,
+      secretAccessKey,
+      operation,
+    });
   } catch (error) {
-    console.error("R2 signed-url generation failed", describeR2Config(config as { R2_ACCOUNT_ID?: string; CLOUDFLARE_ACCOUNT_ID?: string; R2_ACCESS_KEY_ID?: string; R2_SECRET_ACCESS_KEY?: string; R2_BUCKET_NAME?: string; BUCKET_NAME?: string }), error instanceof Error ? error.message : error);
-    throw new ApiError(503, "Cloudflare R2 is rejecting the configured credentials or bucket. Verify the account ID, access key, secret key, and bucket binding match the live Cloudflare project.");
+    console.error("R2 signed-url generation failed", { objectKey, operation, error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : error });
+    throw new ApiError(503, "Cloudflare R2 signed URL generation failed. Check R2 credentials and bucket permissions.");
   }
 }
 async function limit(request: Request, db: D1Database, action: string, max: number) {
