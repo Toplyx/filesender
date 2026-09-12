@@ -54,13 +54,13 @@ async function hmacSha256(secret: string, value: string) {
   const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value));
   return Array.from(new Uint8Array(signature), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
-async function buildSignedR2Url({ objectKey, bucketName, accessKeyId, secretAccessKey, operation }: { objectKey: string; bucketName: string; accessKeyId: string; secretAccessKey: string; operation: "PUT" | "GET" }) {
+async function buildSignedR2Url({ objectKey, bucketName, accountId, accessKeyId, secretAccessKey, operation }: { objectKey: string; bucketName: string; accountId: string; accessKeyId: string; secretAccessKey: string; operation: "PUT" | "GET" }) {
   const region = "auto";
-  const host = `${bucketName}.r2.cloudflarestorage.com`;
+  const host = `${accountId}.r2.cloudflarestorage.com`;
   const date = new Date();
   const amzDate = date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
   const dateStamp = amzDate.slice(0, 8);
-  const canonicalUri = `/${awsEscapePath(objectKey)}`;
+  const canonicalUri = `/${awsEscapePath(`${bucketName}/${objectKey}`)}`;
   const canonicalQuery = new URLSearchParams({
     "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
     "X-Amz-Credential": `${accessKeyId}/${dateStamp}/${region}/s3/aws4_request`,
@@ -96,8 +96,9 @@ async function generateSignedObjectUrl(objectKey: string, operation: "PUT" | "GE
   }
   try {
     return await buildSignedR2Url({
-      objectKey: `/${bucketName}/${objectKey}`.replace(/^\/+/, ""),
+      objectKey,
       bucketName,
+      accountId,
       accessKeyId,
       secretAccessKey,
       operation,
