@@ -13,7 +13,7 @@
     {
       "binding": "DB",
       "database_name": "filesender-db",
-      "database_id": "00000000-0000-4000-8000-000000000000",
+      "database_id": "434ab06a-88db-4d4a-8080-6ec4fc53ec22",
       "migrations_dir": "drizzle"
     }
   ],
