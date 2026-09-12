@@ -20,7 +20,11 @@ function json(data: unknown, status = 200) {
 }
 function failure(error: unknown) {
   if (error instanceof ApiError) return json({ error: error.message }, error.status);
-  console.error("FileSender storage operation failed", error instanceof Error ? error.message : "unknown");
+  console.error("FileSender storage operation failed", error instanceof Error ? {
+    name: error.name,
+    message: error.message,
+    stack: error.stack,
+  } : error);
   return json({ error: "The file cannot be transferred right now. Please try again later." }, 503);
 }
 
@@ -143,11 +147,14 @@ export async function upload(request: Request) {
       if (!safeName || safeName === "." || safeName === "..") throw new ApiError(400, "The file must have a valid name.");
       await limit(request, db, "upload", 20);
       await cleanup(db, bucket);
+      console.log("creating transfer record", { name: safeName, size: length });
       const transfer = await createTransferRecord(db, safeName, length);
       objectId = transfer.id;
+      console.log("transfer record created", { id: transfer.id, code: transfer.code, uploadToken: transfer.uploadToken });
       const uploadUrl = await generateSignedObjectUrl(`transfers/${transfer.id}`, "PUT");
       if (!uploadUrl) throw new ApiError(503, "Direct upload is not configured. Set the R2 signed credentials first.");
       const expiresAt = transfer.expiresAt;
+      console.log("signed upload URL generated", { id: transfer.id, uploadUrlPrefix: uploadUrl.slice(0, 120) });
       return json({ code: transfer.code, name: safeName, size: length, expiresAt, uploadUrl, uploadToken: transfer.uploadToken }, 201);
     }
 
