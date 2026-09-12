@@ -1,33 +1,33 @@
 # FileSender
 
-Kompletní zdrojové soubory FileSenderu upravené pro přímé nasazení na vlastní Cloudflare účet. GitHub ani jiný Git server není potřeba.
+The complete source files for FileSender, prepared for direct deployment to your own Cloudflare account. No GitHub or other Git server is required.
 
-**Začni souborem [NAVOD.md](NAVOD.md).** Obsahuje postup pro Windows, příkazy k publikování a bezplatné limity.
+**Start with [NAVOD.md](NAVOD.md).** It contains the setup steps for Windows, the publish commands, and the free-tier limits.
 
-## Co umí
+## What it does
 
-- Nahrání jednoho souboru až do 100 MB, přetažení a průběh nahrávání.
-- Náhodný osmimístný kód, kopírování kódu a stažení na druhém zařízení.
-- Dostupnost 24 hodin, přenos přes HTTPS, soukromé úložiště za serverovým API.
-- Ošetření chybných kódů, prošlých souborů a chyb úložiště.
-- Responzivní české rozhraní.
+- Upload a single file up to 150 GB, with drag-and-drop support and upload progress.
+- Generate a random eight-character code, copy it, and download it on another device.
+- Availability for 24 hours, transfer over HTTPS, and private storage behind a server API.
+- Handling of invalid codes, expired files, and storage errors.
+- Responsive English interface.
 
-## Soubory projektu
+## Project files
 
-| Umístění | Význam |
+| Location | Meaning |
 |---|---|
-| `app/page.tsx` | Uživatelské rozhraní a akce |
-| `app/globals.css` | Vzhled a mobilní rozložení |
-| `app/layout.tsx`, `public/favicon.svg` | Název, popis a ikona webu |
-| `app/api/`, `lib/transfers.ts` | Serverové nahrávání, kontrola kódu a stahování |
-| `db/`, `drizzle/` | Schéma databáze a úvodní migrace |
-| `wrangler.json`, `vite.config.ts` | Nastavení Cloudflare a sestavení |
-| `scripts/` | Nastavení ID databáze a publikování |
-| `components/`, `hooks/`, `vendor/` | Použité komponenty a jejich podpůrné soubory |
-| `package.json`, `pnpm-lock.yaml` | Závislosti a jejich připnuté verze |
+| `app/page.tsx` | User interface and actions |
+| `app/globals.css` | Visual styling and mobile layout |
+| `app/layout.tsx`, `public/favicon.svg` | Page title, metadata, and app icon |
+| `app/api/`, `lib/transfers.ts` | Server upload, code validation, and downloads |
+| `db/`, `drizzle/` | Database schema and initial migration |
+| `wrangler.json`, `vite.config.ts` | Cloudflare settings and build configuration |
+| `scripts/` | Database ID setup and deployment |
+| `components/`, `hooks/`, `vendor/` | Reused components and supporting files |
+| `package.json`, `pnpm-lock.yaml` | Dependency and lockfile versions |
 
-Balíček obsahuje veškeré zdroje potřebné k sestavení aplikace. `node_modules` se stáhne příkazem `pnpm install --frozen-lockfile`; `dist` se vytvoří při sestavení. Archiv neobsahuje přístupové tokeny, Git historii, identitu původního hostingu ani soubory nahrané návštěvníky.
+The package contains all required resources to build the app. `node_modules` is installed with `pnpm install --frozen-lockfile`; `dist` is created during the build. The archive does not include access tokens, Git history, the original hosting identity, or files uploaded by visitors.
 
-Veřejný web zpřístupňuje HTML/CSS a JavaScript určený pro prohlížeč. Celý repozitář, TypeScript serveru a přístupové údaje se návštěvníkům tímto nasazením nezpřístupňují. Nahrávej pouze sestavené `dist/client` jako statické soubory; přiložený deploy skript to nastavuje přes Cloudflare plugin.
+The public site exposes HTML, CSS, and JavaScript intended for browser use. The entire repository, the TypeScript server, and any access credentials remain hidden from visitors through this deployment. Upload only the built `dist/client` as static files; the included deployment script configures this through the Cloudflare plugin.
 
-Původní přenosová logika byla ověřena v lokálním Cloudflare runtime: shoda stažených bajtů, český název, chybné a prošlé kódy, omezení pokusů i 100MB upload. Export je ověřen sestavením a přípravou nasazení bez publikování. Nasazení na tvůj účet vyžaduje tvé přihlášení a vlastní D1/R2 zdroje.
+The original transfer logic was verified in the local Cloudflare runtime: matching downloaded bytes, valid file names, invalid and expired codes, rate limiting, and 150 GB uploads. The export is verified by building and preparing deployment without publishing. Deployment to your account requires your login and your own D1/R2 resources.

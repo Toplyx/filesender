@@ -1,31 +1,31 @@
-# FileSender — veřejný web bez veřejného GitHubu
+# FileSender — public web without a public GitHub repo
 
-Tento balíček nasadíš přímo ze svého počítače na Cloudflare Workers. Web bude veřejně dostupný na adrese končící `workers.dev`. Nemusíš vytvářet žádný GitHub repozitář ani kupovat doménu.
+You can deploy this package directly from your computer to Cloudflare Workers. The site will be publicly available at a `workers.dev` address. You do not need to create a GitHub repository or buy a domain.
 
-## Nejdřív cena
+## First: pricing
 
-Jde o **provoz zdarma v bezplatných limitech**, ne o neomezené úložiště bez možnosti účtování. Údaje ověřeny 12. 9. 2026:
+This is **free-tier usage**, not unlimited storage with no billing risk. Data verified on 12 Sep 2026:
 
-| Služba | Bezplatný limit relevantní pro FileSender |
+| Service | Free-tier limit relevant to FileSender |
 |---|---|
-| Cloudflare Workers Free | 100 000 požadavků denně, 10 ms CPU na požadavek |
-| Cloudflare D1 na Free | 5 GB databázových dat celkem, 5 milionů čtených a 100 000 zapisovaných řádků denně |
-| R2 Standard | 10 GB-měsíc úložiště, 1 milion operací třídy A a 10 milionů třídy B měsíčně; odchozí data zdarma |
+| Cloudflare Workers Free | 100,000 requests per day, 10 ms CPU per request |
+| Cloudflare D1 Free | 5 GB total database storage, 5 million reads and 100,000 writes per day |
+| R2 Standard | 10 GB-month storage, 1 million class A operations and 10 million class B operations per month; outbound data is free |
 
-R2 je potřeba aktivovat v účtu přes jeho checkout. Ten může požadovat platební metodu. Nad bezplatný objem se R2 účtuje podle využití; samotný plán Workers Free neznamená nulové účty za R2. Použij Standard, ne Infrequent Access. Bezplatné objemy se sdílejí s dalšími aplikacemi na tvém účtu. Sleduj spotřebu v dashboardu; tento balíček nemá zaručený finanční strop. Při větším veřejném provozu už nemusí být zdarma.
+R2 must be activated in your account through its checkout. It may require a payment method. Once you exceed the free volume, R2 usage is billed according to consumption; the Workers Free plan does not mean zero R2 charges. Use Standard, not Infrequent Access. Free limits are shared with other apps in your account. Monitor usage in the dashboard; this package does not guarantee a hard financial cap. Under heavier public traffic, it may stop being free.
 
-Zdroje: [Workers](https://developers.cloudflare.com/workers/platform/pricing/), [D1](https://developers.cloudflare.com/d1/platform/pricing/), [R2](https://developers.cloudflare.com/r2/pricing/), [aktivace R2](https://developers.cloudflare.com/r2/get-started/).
+Sources: [Workers](https://developers.cloudflare.com/workers/platform/pricing/), [D1](https://developers.cloudflare.com/d1/platform/pricing/), [R2](https://developers.cloudflare.com/r2/pricing/), [activate R2](https://developers.cloudflare.com/r2/get-started/).
 
-## 1. Připrav počítač a účet
+## 1. Prepare your computer and account
 
-1. Rozbal celý ZIP, například do `C:\FileSender`. Pracuj ve složce, která obsahuje `package.json`.
-2. Nainstaluj [Node.js](https://nodejs.org/en/download), aktuální LTS; balíček vyžaduje nejméně Node 22.13.
-3. Vytvoř účet na [Cloudflare](https://dash.cloudflare.com/sign-up) a ponech Workers na Free. V části **Storage & databases → R2 → Overview** aktivuj R2. Přečti si podmínky zobrazené při aktivaci.
-4. Otevři v rozbalené složce Terminál. Na Windows můžeš do adresního řádku Průzkumníka napsat `cmd` a stisknout Enter. Po instalaci Node otevři nové okno terminálu.
+1. Unzip the archive, for example to `C:\FileSender`. Work in the folder that contains `package.json`.
+2. Install [Node.js](https://nodejs.org/en/download), latest LTS; the package requires at least Node 22.13.
+3. Create an account on [Cloudflare](https://dash.cloudflare.com/sign-up) and leave Workers on Free. In **Storage & databases → R2 → Overview**, activate R2. Read the conditions shown during activation.
+4. Open a terminal in the extracted folder. On Windows, you can type `cmd` in File Explorer and press Enter. After Node is installed, open a new terminal window.
 
-## 2. Nainstaluj závislosti a přihlas se
+## 2. Install dependencies and log in
 
-Všechny příkazy zadávej ve složce s `package.json`, jeden po druhém:
+Run all commands in the folder containing `package.json`, one by one:
 
 ```sh
 npm install -g pnpm@11.25.0
@@ -33,71 +33,71 @@ pnpm install --frozen-lockfile
 pnpm run login
 ```
 
-Poslední příkaz otevře Cloudflare přihlášení v prohlížeči. Přihlas se do svého účtu a povol Wrangleru nasazování. GitHub nikde nepřipojuj.
+The last command opens Cloudflare login in the browser. Sign in to your account and allow Wrangler to deploy. Do not connect GitHub anywhere.
 
-Pokud PowerShell blokuje `npm.ps1` nebo `pnpm.ps1`, použij Příkazový řádek (`cmd`), případně příkazy `npm.cmd` a `pnpm.cmd`. Není nutné měnit bezpečnostní nastavení Windows.
+If PowerShell blocks `npm.ps1` or `pnpm.ps1`, use Command Prompt (`cmd`) or the commands `npm.cmd` and `pnpm.cmd`. You do not need to change Windows security settings.
 
-## 3. Vytvoř databázi a úložiště
+## 3. Create the database and storage
 
 ```sh
 pnpm exec wrangler d1 create filesender-db
 pnpm exec wrangler r2 bucket create filesender-files
 ```
 
-První příkaz vypíše `database_id`, například UUID ve tvaru `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`. Zkopíruj **své skutečné ID** a potom spusť:
+The first command prints a `database_id`, for example a UUID like `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`. Copy **your real ID** and then run:
 
 ```sh
 pnpm run configure
 ```
 
-Vlož zkopírované `database_id` a stiskni Enter. Skript ho zapíše do `wrangler.json`. Nikam nevkládej API token ani heslo. Pokud máš více Cloudflare účtů, vytvářej databázi, bucket i Worker ve stejném účtu; případně doplň jeho `account_id` do `wrangler.json`.
+Enter the copied `database_id` and press Enter. The script writes it to `wrangler.json`. Do not enter any API token or password. If you have multiple Cloudflare accounts, create the database, bucket, and Worker in the same account; if needed, add its `account_id` to `wrangler.json`.
 
-Jestli už tyto zdroje na svém účtu máš z předchozího pokusu, nevytvářej další: zjisti ID existující databáze v dashboardu nebo příkazem `pnpm exec wrangler d1 list` a použij ho. Názvy musí odpovídat `wrangler.json`.
+If you already have these resources in your account from a previous attempt, do not create new ones: look up the existing database ID in the dashboard or with `pnpm exec wrangler d1 list` and use it. The names must match `wrangler.json`.
 
-## 4. Vytvoř tabulky a nastav úklid
+## 4. Create tables and set cleanup
 
 ```sh
 pnpm run db:apply
 pnpm exec wrangler r2 bucket lifecycle add filesender-files filesender-expiry transfers/ --expire-days 2
 ```
 
-U migrace potvrď vytvoření tabulek. Jde o novou databázi FileSenderu. Druhý příkaz nastaví automatické odstranění objektů s prefixem `transfers/` po dvou dnech. Nastavuj ho jen pro nový bucket FileSenderu, ne pro úložiště jiných souborů.
+Confirm table creation during migration. This is a new FileSender database. The second command automatically removes objects with the `transfers/` prefix after two days. Set this only for the new FileSender bucket, not for other storage buckets.
 
-Kód přestává fungovat po 24 hodinách. Aplikace průběžně odstraňuje prošlé soubory při dalším nahrávání; pravidlo v R2 pomůže uklidit úložiště i v době, kdy web nikdo nepoužívá. Odstranění pomocí lifecycle pravidla nemusí proběhnout přesně v okamžiku dosažení dvou dnů. [Dokumentace úklidu](https://developers.cloudflare.com/r2/buckets/object-lifecycles/).
+The code stops working after 24 hours. The app cleans up expired files as uploads continue; the R2 rule helps tidy storage even when nobody is using the site. Lifecycle cleanup may not happen exactly when the two-day threshold is reached. [Cleanup docs](https://developers.cloudflare.com/r2/buckets/object-lifecycles/).
 
-**U bucketu nezapínej Public access ani veřejnou doménu `r2.dev`.** Veřejný má být web. Soubory poskytuje server až po zadání kódu; samotný bucket zůstává soukromý.
+**Do not enable Public access or a public `r2.dev` domain for the bucket.** The site should be public, but the files are served by the server only after the code is entered; the bucket stays private.
 
-## 5. Zveřejni web
-
-```sh
-pnpm run deploy
-```
-
-Skript web sestaví a nahraje na Cloudflare. Na konci terminál ukáže adresu podobnou `https://filesender.TVOJE-JMENO.workers.dev`. Při prvním nasazení může Cloudflare požádat o volbu tvé `workers.dev` subdomény. Použij přesnou výslednou adresu z terminálu; příklad zde není tvoje skutečná adresa.
-
-Pokud už na účtu existuje jiný Worker jménem `filesender`, nejprve změň `name` v `wrangler.json`, například na `moje-filesender`. Opakované nasazení stejného názvu aktualizuje existující Worker.
-
-Hotovo. Adresu pošli druhému člověku. Uživatelé nepotřebují Cloudflare účet a tvůj počítač potom může být vypnutý. Zdrojové soubory zůstávají u tebe a serverový program v tvém Cloudflare účtu.
-
-Zkušebně nahraj malý soubor, zkopíruj kód a stáhni ho na telefonu nebo v anonymním okně. Zkontroluj obsah a název. Tím ověříš připojení své produkční databáze a úložiště.
-
-## Co ostatní uvidí ze zdrojového kódu
-
-- **GitHub repozitář:** žádný není potřeba. Pokud si později uděláš zálohu na GitHubu, může být Private.
-- **Server, databáze a přístupové údaje:** neposílají se do prohlížeče návštěvníka. Hostitel a správci tvého Cloudflare účtu k serverovému kódu přístup mít mohou.
-- **HTML, CSS a JavaScript prohlížeče:** návštěvník je může zobrazit v nástrojích pro vývojáře. Tohle u veřejného webu úplně skrýt nejde. V této verzi jsou vypnuté source mapy a do statických souborů se nenahrává celý projekt.
-
-ZIP nebo celou složku projektu nenahrávej jako veřejné statické soubory. Použij přiložený deploy příkaz. Samotné přetažení souborů do Netlify Drop nebo GitHub Pages nestačí pro tento backend s D1 a R2.
-
-## Úpravy a další nasazení
-
-Vzhled měň v `app/globals.css`, texty a rozhraní v `app/page.tsx`. Po změně stačí:
+## 5. Publish the site
 
 ```sh
 pnpm run deploy
 ```
 
-Pokud měníš databázové schéma v `db/schema.ts`, vygeneruj a zkontroluj novou migraci, potom ji aplikuj před nasazením. Už aplikované SQL migrace zpětně nepřepisuj.
+The script builds and uploads the web app to Cloudflare. At the end, the terminal shows an address similar to `https://filesender.YOUR-NAME.workers.dev`. On the first deployment, Cloudflare may ask you to choose your `workers.dev` subdomain. Use the exact final URL from the terminal; the example here is not your real address.
+
+If another Worker named `filesender` already exists in your account, first change the `name` in `wrangler.json`, for example to `my-filesender`. Re-deploying the same name updates the existing Worker.
+
+Done. Send the address to someone else. Users do not need a Cloudflare account, and your computer can be turned off afterward. The source files remain with you and the server code runs in your Cloudflare account.
+
+Test by uploading a small file, copying the code, and downloading it on a phone or in an incognito window. Check the content and filename. This verifies your production database and storage connection.
+
+## What others can see from the source code
+
+- **GitHub repository:** not needed. If you later back it up to GitHub, it can be private.
+- **Server, database, and credentials:** are not sent to the visitor’s browser. The host and admins of your Cloudflare account can access the server code.
+- **Browser HTML, CSS, and JavaScript:** visitors can inspect them in developer tools. This cannot be fully hidden on a public web app. In this version, source maps are disabled and the full project is not uploaded into the static assets.
+
+Do not upload the ZIP or whole project folder as public static files. Use the included deploy command. Simply dragging files into Netlify Drop or GitHub Pages is not enough for this backend with D1 and R2.
+
+## Edits and additional deployment
+
+Adjust the look in `app/globals.css` and the text and UI in `app/page.tsx`. After changing them, run:
+
+```sh
+pnpm run deploy
+```
+
+If you change the database schema in `db/schema.ts`, generate and review a new migration and apply it before deployment. Do not rewrite already applied SQL migrations.
 
 ```sh
 pnpm run db:generate
@@ -105,25 +105,25 @@ pnpm run db:apply
 pnpm run deploy
 ```
 
-Pro lokální vývoj s oddělenou testovací databází a úložištěm:
+For local development with a separate test database and storage:
 
 ```sh
 pnpm run db:local
 pnpm run dev
 ```
 
-Přípravu balíčku bez skutečného zveřejnění ověří `pnpm run deploy:dry-run`. Databázové migrace, vytvoření zdrojů a skutečné nasazení na tvůj účet to neprovádí.
+You can validate the package without publishing with `pnpm run deploy:dry-run`. This does not create database migrations, resources, or a real deployment to your account.
 
-## Když se něco nepovede
+## When something goes wrong
 
-| Problém | Řešení |
+| Problem | Solution |
 |---|---|
-| `pnpm` není rozpoznaný | Dokonči instalaci, zavři terminál a otevři nový. |
-| R2 není aktivní | Aktivuj ho v dashboardu; samotné přihlášení Wrangleru nestačí. |
-| Chybí tabulka `transfers` | Spusť `pnpm run db:apply` pro správnou databázi. |
-| Chybné ID databáze / chybí DB | Znovu `pnpm run configure`, poté `pnpm run deploy`. |
-| Bucket neexistuje | Ověř název `filesender-files` a stejný Cloudflare účet. |
-| Překročený limit Free / chyba 1102 | Zkontroluj kvóty a CPU v dashboardu. Bezplatný plán má pevná omezení; neslibuje neomezený provoz. |
-| Web jde jen tobě | Ověř, že používáš výslednou `workers.dev` adresu a nezapnul jsi Cloudflare Access. |
+| `pnpm` is not recognized | Complete the install, close the terminal, and open a new one. |
+| R2 is inactive | Activate it in the dashboard; logging in to Wrangler is not enough. |
+| Table `transfers` is missing | Run `pnpm run db:apply` for the correct database. |
+| Wrong database ID / missing DB | Run `pnpm run configure` again, then `pnpm run deploy`. |
+| Bucket does not exist | Check the name `filesender-files` and the same Cloudflare account. |
+| Free-plan limit exceeded / error 1102 | Check quotas and CPU in the dashboard. The free plan has fixed limits and does not promise unlimited traffic. |
+| The site only works for you | Check that you are using the final `workers.dev` URL and have not enabled Cloudflare Access. |
 
-Nasazování z počítače vychází z [Cloudflare Vite pluginu](https://developers.cloudflare.com/workers/vite-plugin/) a jeho sestavení pro Wrangler. Bez přihlášení do tvého účtu nelze ověřit konkrétní produkční zdroje; v exportu je záměrně jen zástupné ID databáze.
+Deployment from your computer relies on the [Cloudflare Vite plugin](https://developers.cloudflare.com/workers/vite-plugin/) and its build process for Wrangler. Without logging into your account, no specific production resources can be verified; the export intentionally includes only placeholder database IDs.

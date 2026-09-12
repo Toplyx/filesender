@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 
-const MAX_SIZE = 100_000_000;
+const MAX_SIZE = 150_000_000_000;
 const TTL = 24 * 60 * 60 * 1000;
 const ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 type TransferRow = { id: string; code_hash: string; download_token: string; name: string; size: number; status: string; created_at: number; expires_at: number };
@@ -9,7 +9,7 @@ class ApiError extends Error {
 }
 function storage() {
   const bindings = env as { DB?: D1Database; BUCKET?: R2Bucket };
-  if (!bindings.DB || !bindings.BUCKET) throw new ApiError(503, "Úložiště je teď nedostupné. Zkus to prosím za chvíli.");
+  if (!bindings.DB || !bindings.BUCKET) throw new ApiError(503, "Storage is unavailable right now. Please try again later.");
   return { db: bindings.DB, bucket: bindings.BUCKET };
 }
 function json(data: unknown, status = 200) {
@@ -18,7 +18,7 @@ function json(data: unknown, status = 200) {
 function failure(error: unknown) {
   if (error instanceof ApiError) return json({ error: error.message }, error.status);
   console.error("FileSender storage operation failed", error instanceof Error ? error.message : "unknown");
-  return json({ error: "Soubor teď nelze přenést. Zkus to prosím za chvíli znovu." }, 503);
+  return json({ error: "The file cannot be transferred right now. Please try again later." }, 503);
 }
 async function hash(value: string) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
@@ -40,7 +40,7 @@ async function limit(request: Request, db: D1Database, action: string, max: numb
   const identity = request.headers.get("cf-connecting-ip") || "local";
   const key = await hash(`${action}:${window}:${identity}`);
   const result = await db.prepare("INSERT INTO rate_limits (key, count, expires_at) VALUES (?, 1, ?) ON CONFLICT(key) DO UPDATE SET count = rate_limits.count + 1 RETURNING count").bind(key, (window + 1) * 600_000).first<{ count: number }>();
-  if (result && result.count > max) throw new ApiError(429, "Příliš mnoho pokusů. Zkus to prosím znovu za 10 minut.");
+  if (result && result.count > max) throw new ApiError(429, "Too many attempts. Please try again in 10 minutes.");
 }
 async function cleanup(db: D1Database, bucket: R2Bucket) {
   const rows = await db.prepare("SELECT id FROM transfers WHERE expires_at <= ? ORDER BY expires_at LIMIT 20").bind(Date.now()).all<{ id: string }>();
@@ -57,16 +57,16 @@ export async function upload(request: Request) {
   try {
     const { db, bucket } = storage();
     const origin = request.headers.get("origin");
-    if ((origin && origin !== new URL(request.url).origin) || request.headers.get("sec-fetch-site") === "cross-site") throw new ApiError(403, "Soubor odešli přímo ze stránky FileSender.");
+    if ((origin && origin !== new URL(request.url).origin) || request.headers.get("sec-fetch-site") === "cross-site") throw new ApiError(403, "Upload the file directly from the FileSender page.");
     const length = Number(request.headers.get("content-length"));
     const statedSize = Number(request.headers.get("x-file-size"));
-    if (!request.headers.has("content-length")) throw new ApiError(411, "Velikost souboru nelze ověřit. Vyber ho prosím znovu.");
-    if (!Number.isSafeInteger(length) || length <= 0 || length !== statedSize || !request.body) throw new ApiError(400, "Vyber platný neprázdný soubor.");
-    if (length > MAX_SIZE) throw new ApiError(413, "Soubor je příliš velký. Maximum je 100 MB.");
+    if (!request.headers.has("content-length")) throw new ApiError(411, "The file size could not be verified. Please select it again.");
+    if (!Number.isSafeInteger(length) || length <= 0 || length !== statedSize || !request.body) throw new ApiError(400, "Please choose a valid non-empty file.");
+    if (length > MAX_SIZE) throw new ApiError(413, "File is too large. Maximum size is 150 GB.");
     let name: string;
-    try { name = decodeURIComponent(request.headers.get("x-file-name") || ""); } catch { throw new ApiError(400, "Název souboru není platný."); }
+    try { name = decodeURIComponent(request.headers.get("x-file-name") || ""); } catch { throw new ApiError(400, "The file name is invalid."); }
     name = name.replace(/[\x00-\x1f\x7f/\\]/g, "_").replace(/[\u202a-\u202e\u2066-\u2069]/g, "").trim().slice(0, 240);
-    if (!name || name === "." || name === "..") throw new ApiError(400, "Soubor musí mít platný název.");
+    if (!name || name === "." || name === "..") throw new ApiError(400, "The file must have a valid name.");
     await limit(request, db, "upload", 20);
     await cleanup(db, bucket);
     const id = crypto.randomUUID();
@@ -77,10 +77,10 @@ export async function upload(request: Request) {
       const row = await db.prepare("INSERT INTO transfers (id, code_hash, download_token, name, size, status, created_at, expires_at) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?) ON CONFLICT(code_hash) DO NOTHING RETURNING id").bind(id, await hash(candidate), token, name, length, Date.now(), Date.now() + TTL).first();
       if (row) { code = candidate; objectId = id; break; }
     }
-    if (!code) throw new ApiError(503, "Kód se nepodařilo vytvořit. Zkus to znovu.");
-    // Stream the request straight into R2: never buffer a 100 MB upload in Worker memory.
+    if (!code) throw new ApiError(503, "The code could not be generated. Please try again.");
+    // Stream the request straight into R2: never buffer a 150 GB upload in Worker memory.
     const stored = await bucket.put(`transfers/${id}`, request.body, { httpMetadata: { contentType: "application/octet-stream" } });
-    if (!stored || stored.size !== length) throw new ApiError(400, "Soubor se nenahrál celý. Zkus ho prosím odeslat znovu.");
+    if (!stored || stored.size !== length) throw new ApiError(400, "The file did not upload completely. Please try sending it again.");
     const expiresAt = Date.now() + TTL;
     await db.prepare("UPDATE transfers SET status = 'ready', expires_at = ? WHERE id = ?").bind(expiresAt, id).run();
     objectId = null;
@@ -98,10 +98,10 @@ export async function lookup(request: Request, raw: string) {
     const { db, bucket } = storage();
     await limit(request, db, "lookup", 40);
     const code = raw.toUpperCase().replace(/[-–\s]/g, "");
-    if (!/^[A-Z0-9]{8}$/.test(code)) throw new ApiError(400, "Kód musí mít přesně 8 písmen nebo číslic.");
+    if (!/^[A-Z0-9]{8}$/.test(code)) throw new ApiError(400, "The code must contain exactly 8 letters or numbers.");
     const row = await db.prepare("SELECT * FROM transfers WHERE code_hash = ? AND status = 'ready'").bind(await hash(code)).first<TransferRow>();
-    if (!row || row.expires_at <= Date.now()) throw new ApiError(404, "Tento kód neexistuje nebo už vypršel. Zkontroluj ho u odesílatele.");
-    if (!(await bucket.head(`transfers/${row.id}`))) throw new ApiError(404, "Soubor už není dostupný. Požádej odesílatele o nové nahrání.");
+    if (!row || row.expires_at <= Date.now()) throw new ApiError(404, "This code does not exist or has expired. Check with the sender.");
+    if (!(await bucket.head(`transfers/${row.id}`))) throw new ApiError(404, "The file is no longer available. Ask the sender to upload it again.");
     return json({ ...publicTransfer(row), code, ticket: row.download_token });
   } catch (error) { return failure(error); }
 }
@@ -110,11 +110,11 @@ export async function download(request: Request, token: string) {
   try {
     const { db, bucket } = storage();
     await limit(request, db, "download", 60);
-    if (!/^[0-9a-f-]{36}$/.test(token)) throw new ApiError(404, "Soubor není dostupný.");
+    if (!/^[0-9a-f-]{36}$/.test(token)) throw new ApiError(404, "The file is not available.");
     const row = await db.prepare("SELECT * FROM transfers WHERE download_token = ? AND status = 'ready'").bind(token).first<TransferRow>();
-    if (!row || row.expires_at <= Date.now()) throw new ApiError(404, "Soubor už není dostupný. Jeho platnost mohla vypršet.");
+    if (!row || row.expires_at <= Date.now()) throw new ApiError(404, "The file is no longer available. Its validity may have expired.");
     const object = await bucket.get(`transfers/${row.id}`);
-    if (!object) throw new ApiError(404, "Soubor už není dostupný.");
+    if (!object) throw new ApiError(404, "The file is no longer available.");
     const fallback = row.name.replace(/[^a-zA-Z0-9._ -]/g, "_");
     const encoded = encodeURIComponent(row.name).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
     return new Response(object.body, { headers: {
