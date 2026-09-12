@@ -69,17 +69,31 @@ function getR2Client(config: { R2_ACCOUNT_ID?: string; CLOUDFLARE_ACCOUNT_ID?: s
     bucketName: getR2BucketName(config),
   };
 }
+function describeR2Config(config: { R2_ACCOUNT_ID?: string; CLOUDFLARE_ACCOUNT_ID?: string; R2_ACCESS_KEY_ID?: string; R2_SECRET_ACCESS_KEY?: string; R2_BUCKET_NAME?: string; BUCKET_NAME?: string }) {
+  const accountId = config.R2_ACCOUNT_ID || config.CLOUDFLARE_ACCOUNT_ID;
+  const accessKeyId = config.R2_ACCESS_KEY_ID ? `${config.R2_ACCESS_KEY_ID.slice(0, 4)}…${config.R2_ACCESS_KEY_ID.slice(-4)}` : "missing";
+  const secretStatus = config.R2_SECRET_ACCESS_KEY ? "present" : "missing";
+  const bucketName = getR2BucketName(config);
+  return { accountId: accountId ?? "missing", accessKeyId, secretStatus, bucketName };
+}
 async function generateSignedObjectUrl(objectKey: string, operation: "PUT" | "GET") {
   const { config } = storage();
   if (signedUploadConfigMissing(config as { R2_ACCOUNT_ID?: string; CLOUDFLARE_ACCOUNT_ID?: string; R2_ACCESS_KEY_ID?: string; R2_SECRET_ACCESS_KEY?: string; R2_BUCKET_NAME?: string; BUCKET_NAME?: string })) {
     throw new ApiError(503, "Direct upload is not configured. Set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, and R2_BUCKET_NAME in Cloudflare Worker secrets.");
   }
   const client = getR2Client(config as { R2_ACCOUNT_ID?: string; CLOUDFLARE_ACCOUNT_ID?: string; R2_ACCESS_KEY_ID?: string; R2_SECRET_ACCESS_KEY?: string; R2_BUCKET_NAME?: string; BUCKET_NAME?: string });
-  if (!client) return null;
+  if (!client) {
+    throw new ApiError(503, "Direct upload is not configured. Check the Cloudflare R2 credentials for this Worker.");
+  }
   const command = operation === "PUT"
     ? new PutObjectCommand({ Bucket: client.bucketName, Key: objectKey, ContentType: "application/octet-stream" })
     : new GetObjectCommand({ Bucket: client.bucketName, Key: objectKey });
-  return getSignedUrl(client.client, command, { expiresIn: SIGNED_URL_TTL });
+  try {
+    return await getSignedUrl(client.client, command, { expiresIn: SIGNED_URL_TTL });
+  } catch (error) {
+    console.error("R2 signed-url generation failed", describeR2Config(config as { R2_ACCOUNT_ID?: string; CLOUDFLARE_ACCOUNT_ID?: string; R2_ACCESS_KEY_ID?: string; R2_SECRET_ACCESS_KEY?: string; R2_BUCKET_NAME?: string; BUCKET_NAME?: string }), error instanceof Error ? error.message : error);
+    throw new ApiError(503, "Cloudflare R2 is rejecting the configured credentials or bucket. Verify the account ID, access key, secret key, and bucket binding match the live Cloudflare project.");
+  }
 }
 async function limit(request: Request, db: D1Database, action: string, max: number) {
   const window = Math.floor(Date.now() / 600_000);
