@@ -23,6 +23,14 @@ function failure(error: unknown) {
   console.error("FileSender storage operation failed", error instanceof Error ? error.message : "unknown");
   return json({ error: "The file cannot be transferred right now. Please try again later." }, 503);
 }
+
+function signedUploadConfigMissing(config: { R2_ACCOUNT_ID?: string; CLOUDFLARE_ACCOUNT_ID?: string; R2_ACCESS_KEY_ID?: string; R2_SECRET_ACCESS_KEY?: string; R2_BUCKET_NAME?: string; BUCKET_NAME?: string }) {
+  const accountId = config.R2_ACCOUNT_ID || config.CLOUDFLARE_ACCOUNT_ID;
+  const accessKeyId = config.R2_ACCESS_KEY_ID;
+  const secretAccessKey = config.R2_SECRET_ACCESS_KEY;
+  const bucketName = getR2BucketName(config);
+  return !accountId || !accessKeyId || !secretAccessKey || !bucketName;
+}
 async function hash(value: string) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
@@ -63,6 +71,9 @@ function getR2Client(config: { R2_ACCOUNT_ID?: string; CLOUDFLARE_ACCOUNT_ID?: s
 }
 async function generateSignedObjectUrl(objectKey: string, operation: "PUT" | "GET") {
   const { config } = storage();
+  if (signedUploadConfigMissing(config as { R2_ACCOUNT_ID?: string; CLOUDFLARE_ACCOUNT_ID?: string; R2_ACCESS_KEY_ID?: string; R2_SECRET_ACCESS_KEY?: string; R2_BUCKET_NAME?: string; BUCKET_NAME?: string })) {
+    throw new ApiError(503, "Direct upload is not configured. Set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, and R2_BUCKET_NAME in Cloudflare Worker secrets.");
+  }
   const client = getR2Client(config as { R2_ACCOUNT_ID?: string; CLOUDFLARE_ACCOUNT_ID?: string; R2_ACCESS_KEY_ID?: string; R2_SECRET_ACCESS_KEY?: string; R2_BUCKET_NAME?: string; BUCKET_NAME?: string });
   if (!client) return null;
   const command = operation === "PUT"
