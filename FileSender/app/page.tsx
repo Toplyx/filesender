@@ -49,27 +49,58 @@ export default function Home() {
     setFile(selected); setSent(null); setProgress(0);
   }
 
-  function uploadFile() {
+  async function uploadFile() {
     if (!file || uploading || xhr.current) return;
     setUploadError(""); setUploading(true); setProgress(0);
-    const request = new XMLHttpRequest(); xhr.current = request;
-    request.open("POST", "/api/transfers");
-    request.setRequestHeader("Content-Type", "application/octet-stream");
-    request.setRequestHeader("X-File-Name", encodeURIComponent(file.name));
-    request.setRequestHeader("X-File-Size", String(file.size));
-    request.timeout = 15 * 60 * 1000;
-    request.upload.onprogress = (event) => { if (event.lengthComputable) setProgress(Math.round(event.loaded / event.total * 100)); };
-    const finish = () => { setUploading(false); xhr.current = null; };
-    request.onload = () => {
-      finish();
-      let data; try { data = JSON.parse(request.responseText); } catch { setUploadError("Upload could not be confirmed. Please try again."); return; }
-      if (request.status >= 200 && request.status < 300) { setSent(data); setFile(null); toast.success("File is ready to share."); }
-      else setUploadError(data.error || "The file could not be uploaded. Please try again.");
-    };
-    request.onerror = () => { finish(); setUploadError("The connection dropped. Your file is still selected, so you can try sending it again."); };
-    request.ontimeout = () => { finish(); setUploadError("Upload took too long. Check your connection and try again."); };
-    request.onabort = () => { finish(); setProgress(0); toast("Upload was canceled."); };
-    request.send(file);
+    try {
+      const createResponse = await fetch("/api/transfers", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: file.name, size: file.size }) });
+      const createData = await createResponse.json() as { code?: string; name?: string; size?: number; expiresAt?: number; uploadUrl?: string; uploadToken?: string; error?: string };
+      if (!createResponse.ok || !createData.code || !createData.uploadUrl || !createData.uploadToken) {
+        throw new Error(createData.error || "The upload session could not be created.");
+      }
+
+      const request = new XMLHttpRequest(); xhr.current = request;
+      request.open("PUT", createData.uploadUrl);
+      request.setRequestHeader("Content-Type", "application/octet-stream");
+      request.timeout = 15 * 60 * 1000;
+      request.upload.onprogress = (event) => { if (event.lengthComputable) setProgress(Math.round(event.loaded / event.total * 100)); };
+
+      const finish = () => { setUploading(false); xhr.current = null; };
+      request.onload = async () => {
+        try {
+          if (request.status < 200 || request.status >= 300) {
+            throw new Error("The file could not be uploaded directly to storage.");
+          }
+          const finalizeResponse = await fetch(`/api/transfers/${createData.code}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ uploadToken: createData.uploadToken }),
+          });
+          const finalizeData = await finalizeResponse.json() as { error?: string; expiresAt?: number; name?: string; size?: number; code?: string };
+          if (!finalizeResponse.ok || !finalizeData.expiresAt) {
+            throw new Error(finalizeData.error || "The file upload was not finalized.");
+          }
+          const finalCode = createData.code ?? "";
+          if (!finalCode) throw new Error("Upload session did not return a valid code.");
+          setSent({ code: finalCode, name: finalizeData.name || createData.name || file.name, size: finalizeData.size || file.size, expiresAt: finalizeData.expiresAt ?? Date.now() + 24 * 60 * 60 * 1000 });
+          setFile(null);
+          toast.success("File is ready to share.");
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "The file could not be uploaded. Please try again.";
+          setUploadError(message);
+        } finally {
+          finish();
+        }
+      };
+      request.onerror = () => { finish(); setUploadError("The connection dropped. Your file is still selected, so you can try sending it again."); };
+      request.ontimeout = () => { finish(); setUploadError("Upload took too long. Check your connection and try again."); };
+      request.onabort = () => { finish(); setProgress(0); toast("Upload was canceled."); };
+      request.send(file);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The file could not be uploaded. Please try again.";
+      setUploadError(message);
+      setUploading(false);
+    }
   }
 
   const receiveFile = useCallback(async (raw: string) => {
@@ -80,10 +111,10 @@ export default function Home() {
     setCode(entered); setReceiveError(""); setReceived(null); setReceiving(true);
     try {
       const response = await fetch(`/api/transfers/${entered}`, { cache: "no-store" });
-      let data: Transfer & { ticket: string; error?: string }; try { data = await response.json() as Transfer & { ticket: string; error?: string }; } catch { throw new Error("The service is not responding right now. Please try again."); }
+      let data: Transfer & { ticket?: string; downloadUrl?: string; error?: string }; try { data = await response.json() as Transfer & { ticket?: string; downloadUrl?: string; error?: string }; } catch { throw new Error("The service is not responding right now. Please try again."); }
       if (!response.ok) throw new Error(data.error || "The file could not be found.");
       const link = document.createElement("a");
-      link.href = `/api/download/${encodeURIComponent(data.ticket)}`;
+      link.href = data.downloadUrl || `/api/download/${encodeURIComponent(data.ticket ?? "")}`;
       link.download = data.name;
       document.body.appendChild(link); link.click(); link.remove();
       setReceived(data);
